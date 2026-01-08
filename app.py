@@ -9,21 +9,19 @@ import matplotlib.pyplot as plt
 import time
 
 # =========================
-# AI Trade Agent - Pro Version (Free Tier Optimized - No Real-Time Required)
+# AI Trade Agent - Pro Version (Free Tier - Correct Timeframe Dates Fixed)
 # =========================
 class AITradeAgent:
     def __init__(self, api_key):
         self.client = RESTClient(api_key)
 
     def get_current_price(self, short_data):
-        """Use latest 15min bar close as current price (free tier compatible)"""
         if short_data and 'df' in short_data:
             latest_close = short_data["bar_price"]
             return latest_close, "Latest 15min Bar"
         return None, "Unavailable"
 
     def get_prev_close(self, ticker):
-        """Robust previous trading day close (handles weekends/holidays)"""
         try:
             end_date = datetime.now(ZoneInfo("America/New_York")).date()
             start_date = end_date - timedelta(days=30)
@@ -33,7 +31,7 @@ class AITradeAgent:
                 to=end_date.strftime("%Y-%m-%d")
             )
             if aggs and len(aggs) >= 2:
-                return round(aggs[-2].close, 2)  # Previous trading day
+                return round(aggs[-2].close, 2)
             elif aggs and len(aggs) == 1:
                 return round(aggs[-1].close, 2)
         except Exception as e:
@@ -63,7 +61,7 @@ class AITradeAgent:
                     timespan=timespan,
                     from_=from_str,
                     to=to_str,
-                    limit=50000  # Increased to handle extended hours bars
+                    limit=50000
                 )
                 if not aggs or len(aggs) == 0:
                     return None
@@ -140,9 +138,17 @@ class AITradeAgent:
         else:
             signal, color = "NEUTRAL", "#f1c40f"
 
-        time_fmt = '%b %d, %I:%M %p' if timeframe_name == "Short" else '%b %d, %Y'
-        latest_time = latest['date'].strftime(time_fmt)
-        caption = f"{timeframe_name}-Term ({latest_time})"
+        # Fixed date formatting
+        if timeframe_name == "Short":
+            time_str = latest['date'].strftime('%b %d, %I:%M %p')
+        elif timeframe_name == "Medium":
+            time_str = latest['date'].strftime('%b %d, %Y')
+        else:  # Long (weekly) - show week range for clarity
+            week_start = (latest['date'] - timedelta(days=latest['date'].weekday() + 6)).strftime('%b %d')
+            week_end = latest['date'].strftime('%b %d, %Y')
+            time_str = f"{week_start}–{week_end}"
+
+        caption = f"{timeframe_name}-Term ({time_str})"
 
         return f"{signal}<br><small>{caption}</small>", color
 
@@ -192,7 +198,7 @@ if not api_key:
 
 agent = AITradeAgent(api_key)
 
-ticker = st.text_input("Enter Ticker Symbol", value="SPY", help="e.g., TSLA, AAPL, NVDA").upper().strip()
+ticker = st.text_input("Enter Ticker Symbol", value="AMZN", help="e.g., TSLA, AAPL, NVDA").upper().strip()
 
 col1, col2 = st.columns([1, 4])
 with col1:
