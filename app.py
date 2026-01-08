@@ -6,10 +6,9 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import os
 import matplotlib.pyplot as plt
-import time
 
 # =========================
-# AI Trade Agent - Pro Version (Free Tier + Analyst Price Target)
+# AI Trade Agent - Pro Version (Manual Refresh Only)
 # =========================
 class AITradeAgent:
     def __init__(self, api_key):
@@ -199,111 +198,101 @@ agent = AITradeAgent(api_key)
 
 ticker = st.text_input("Enter Ticker Symbol", value="AMZN", help="e.g., TSLA, AAPL, NVDA").upper().strip()
 
-col1, col2 = st.columns([1, 4])
-with col1:
-    auto_refresh = st.checkbox("Auto Refresh Every 1 Minute", value=True)
-with col2:
-    if st.button("🔄 Run Analysis Now"):
-        st.session_state.force_run = True
+# Manual refresh button only
+if st.button("🔄 Run Analysis Now"):
+    st.session_state.force_run = True
 
-if auto_refresh or st.session_state.get("force_run", False):
+# Run analysis on button click or initial load
+if st.session_state.get("force_run", False) or 'results' not in st.session_state:
     with st.spinner(f"Fetching data for {ticker}..."):
         results = agent.get_multi_signals(ticker)
-
-    current_price, price_type = agent.get_current_price(results["short_data"])
-    prev_close = results["prev_close"]
-    change = round(current_price - prev_close, 2) if current_price and prev_close else None
-    pct = round((change / prev_close) * 100, 2) if change is not None and prev_close else None
-
-    # === Metrics ===
-    c1, c2, c3, c4 = st.columns(4)
-    if current_price:
-        delta_str = f"{'' if change >= 0 else ''}{change:+.2f} ({pct:+.2f}%)" if change is not None else ""
-        c1.metric(f"**Current Price** ({price_type})", f"${current_price}", delta_str)
-    else:
-        c1.metric("Current Price", "Unavailable")
-
-    if results["short_data"]:
-        data = results["short_data"]
-        c2.metric("RSI (14) - 15min", data['rsi'])
-        c3.metric("Relative Volume - 15min", f"{data['rvol']}x")
-        c4.metric("Latest 15min Close", f"${data['bar_price']}")
-    else:
-        c2.metric("RSI (14)", "N/A")
-        c3.metric("Relative Volume", "N/A")
-        c4.metric("Latest Bar", "N/A")
-
-    # === Signals ===
-    st.markdown("### 📊 Trend Signals Across Timeframes")
-    s1, s2, s3 = st.columns(3)
-    with s1:
-        sig_html, color = results["short"]
-        s1.markdown(f"<div style='background-color:{color}; color:white; padding:20px; border-radius:12px; text-align:center; font-size:18px; font-weight:bold;'>Short-Term<br>{sig_html}</div>", unsafe_allow_html=True)
-    with s2:
-        sig_html, color = results["medium"]
-        s2.markdown(f"<div style='background-color:{color}; color:white; padding:20px; border-radius:12px; text-align:center; font-size:18px; font-weight:bold;'>Medium-Term<br>{sig_html}</div>", unsafe_allow_html=True)
-    with s3:
-        sig_html, color = results["long"]
-        s3.markdown(f"<div style='background-color:{color}; color:white; padding:20px; border-radius:12px; text-align:center; font-size:18px; font-weight:bold;'>Long-Term<br>{sig_html}</div>", unsafe_allow_html=True)
-
-    # === NEW: Analyst Consensus Price Target ===
-    st.markdown("### 🎯 Wall Street Analyst Consensus (as of Jan 7, 2026)")
-    if current_price:
-        analyst_target = 296.00  # Latest average from multiple sources
-        upside = round(((analyst_target - current_price) / current_price) * 100, 1)
-        col_a1, col_a2, col_a3 = st.columns(3)
-        col_a1.metric("**Average 12-Month Target**", f"${analyst_target}")
-        col_a2.metric("**Implied Upside**", f"{upside:+}%")
-        col_a3.metric("**Consensus Rating**", "Strong Buy")
-        st.caption("📈 Based on 45–74 analysts (TipRanks, TradingView, MarketBeat). High: $360 | Low: $250")
-    else:
-        st.info("Analyst target unavailable without current price data.")
-
-    # === Chart ===
-    if results["short_data"]:
-        df = results["short_data"]["df"]
-        st.markdown("### 📈 15-Minute Intraday Chart")
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
-        
-        ax1.plot(df['date'], df['close'], color='#3498db', linewidth=2.5, label='Close Price')
-        ax1.fill_between(df['date'], df['close'], alpha=0.1, color='#3498db')
-        ax1.set_title(f"{ticker} - 15-Minute Bars (Completed)", fontsize=16)
-        ax1.set_ylabel("Price ($)")
-        ax1.legend()
-        ax1.grid(alpha=0.3)
-
-        bar_colors = ['green' if c >= o else 'red' for c, o in zip(df['close'], df['open'])]
-        ax2.bar(df['date'], df['volume'], color=bar_colors, alpha=0.7, width=0.006)
-        ax2.plot(df['date'], df['vol_avg'], color='orange', linewidth=2, label='20-Period Avg Volume')
-        ax2.set_ylabel("Volume")
-        ax2.legend()
-        ax2.grid(alpha=0.3)
-
-        fig.autofmt_xdate()
-        st.pyplot(fig)
-
-        st.caption("📊 Chart shows completed 15-minute bars. Price updates as new bars close (free tier).")
-
-        with st.expander("Recent 15-Minute Data Table"):
-            display = df[['date', 'close', 'volume', 'rsi', 'rvol']].tail(20).copy()
-            display['date'] = display['date'].dt.strftime('%m/%d %I:%M %p')
-            display = display.round({'close': 2, 'rsi': 1, 'rvol': 2})
-            st.dataframe(display, use_container_width=True)
-    else:
-        st.info("No 15-minute data available yet. Market may be closed or try again shortly.")
-
-    # === Auto Refresh ===
-    if auto_refresh:
-        placeholder = st.empty()
-        for i in range(60, 0, -1):
-            placeholder.info(f"🔄 Auto-refreshing in {i}s... (1-minute cycle)")
-            time.sleep(1)
-        placeholder.empty()
-        st.rerun()
-
+    st.session_state.results = results
     if st.session_state.get("force_run"):
         del st.session_state.force_run
-
 else:
-    st.info("👈 Check 'Auto Refresh' or click 'Run Analysis Now' to start.")
+    results = st.session_state.results
+
+current_price, price_type = agent.get_current_price(results["short_data"])
+prev_close = results["prev_close"]
+change = round(current_price - prev_close, 2) if current_price and prev_close else None
+pct = round((change / prev_close) * 100, 2) if change is not None and prev_close else None
+
+# === Metrics ===
+c1, c2, c3, c4 = st.columns(4)
+if current_price:
+    delta_str = f"{'' if change >= 0 else ''}{change:+.2f} ({pct:+.2f}%)" if change is not None else ""
+    c1.metric(f"**Current Price** ({price_type})", f"${current_price}", delta_str)
+else:
+    c1.metric("Current Price", "Unavailable")
+
+if results["short_data"]:
+    data = results["short_data"]
+    c2.metric("RSI (14) - 15min", data['rsi'])
+    c3.metric("Relative Volume - 15min", f"{data['rvol']}x")
+    c4.metric("Latest 15min Close", f"${data['bar_price']}")
+else:
+    c2.metric("RSI (14)", "N/A")
+    c3.metric("Relative Volume", "N/A")
+    c4.metric("Latest Bar", "N/A")
+
+# === Signals ===
+st.markdown("### 📊 Trend Signals Across Timeframes")
+s1, s2, s3 = st.columns(3)
+with s1:
+    sig_html, color = results["short"]
+    s1.markdown(f"<div style='background-color:{color}; color:white; padding:20px; border-radius:12px; text-align:center; font-size:18px; font-weight:bold;'>Short-Term<br>{sig_html}</div>", unsafe_allow_html=True)
+with s2:
+    sig_html, color = results["medium"]
+    s2.markdown(f"<div style='background-color:{color}; color:white; padding:20px; border-radius:12px; text-align:center; font-size:18px; font-weight:bold;'>Medium-Term<br>{sig_html}</div>", unsafe_allow_html=True)
+with s3:
+    sig_html, color = results["long"]
+    s3.markdown(f"<div style='background-color:{color}; color:white; padding:20px; border-radius:12px; text-align:center; font-size:18px; font-weight:bold;'>Long-Term<br>{sig_html}</div>", unsafe_allow_html=True)
+
+# === Analyst Consensus Price Target ===
+st.markdown("### 🎯 Wall Street Analyst Consensus (as of Jan 7, 2026)")
+if current_price:
+    analyst_target = 296.00
+    upside = round(((analyst_target - current_price) / current_price) * 100, 1)
+    col_a1, col_a2, col_a3 = st.columns(3)
+    col_a1.metric("**Average 12-Month Target**", f"${analyst_target}")
+    col_a2.metric("**Implied Upside**", f"{upside:+}%")
+    col_a3.metric("**Consensus Rating**", "Strong Buy")
+    st.caption("📈 Based on 45–74 analysts. High: $360 | Low: $250")
+else:
+    st.info("Analyst target unavailable without current price data.")
+
+# === Chart ===
+if results["short_data"]:
+    df = results["short_data"]["df"]
+    st.markdown("### 📈 15-Minute Intraday Chart")
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    
+    ax1.plot(df['date'], df['close'], color='#3498db', linewidth=2.5, label='Close Price')
+    ax1.fill_between(df['date'], df['close'], alpha=0.1, color='#3498db')
+    ax1.set_title(f"{ticker} - 15-Minute Bars (Completed)", fontsize=16)
+    ax1.set_ylabel("Price ($)")
+    ax1.legend()
+    ax1.grid(alpha=0.3)
+
+    bar_colors = ['green' if c >= o else 'red' for c, o in zip(df['close'], df['open'])]
+    ax2.bar(df['date'], df['volume'], color=bar_colors, alpha=0.7, width=0.006)
+    ax2.plot(df['date'], df['vol_avg'], color='orange', linewidth=2, label='20-Period Avg Volume')
+    ax2.set_ylabel("Volume")
+    ax2.legend()
+    ax2.grid(alpha=0.3)
+
+    fig.autofmt_xdate()
+    st.pyplot(fig)
+
+    st.caption("📊 Chart shows completed 15-minute bars (free tier).")
+
+    with st.expander("Recent 15-Minute Data Table"):
+        display = df[['date', 'close', 'volume', 'rsi', 'rvol']].tail(20).copy()
+        display['date'] = display['date'].dt.strftime('%m/%d %I:%M %p')
+        display = display.round({'close': 2, 'rsi': 1, 'rvol': 2})
+        st.dataframe(display, use_container_width=True)
+else:
+    st.info("No 15-minute data available. Click 'Run Analysis Now' during market hours.")
+
+st.info("👆 Click **Run Analysis Now** to refresh data manually.")
