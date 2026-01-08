@@ -63,7 +63,7 @@ class AITradeAgent:
                     timespan=timespan,
                     from_=from_str,
                     to=to_str,
-                    limit=5000
+                    limit=50000  # Increased to handle extended hours bars
                 )
                 if not aggs or len(aggs) == 0:
                     return None
