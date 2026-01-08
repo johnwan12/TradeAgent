@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import time
 
 # =========================
-# AI Trade Agent - Final Pro Version with Live Price & Rate Limit Safety
+# AI Trade Agent - Pro Version (1-Minute Refresh)
 # =========================
 class AITradeAgent:
     def __init__(self, api_key):
@@ -26,15 +26,23 @@ class AITradeAgent:
         return None
 
     def get_prev_close(self, ticker):
-        """Get previous trading day's close for % change calculation"""
+        """Get previous trading day's close reliably (handles weekends/holidays)"""
         try:
-            # Get yesterday's date (skip weekends if needed, but Polygon handles it)
-            yesterday = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=1)).strftime("%Y-%m-%d")
-            prev = self.client.get_aggs(ticker, 1, "day", yesterday, yesterday)
-            if prev and len(prev) > 0:
-                return round(prev[-1].close, 2)
-        except:
-            pass
+            end_date = datetime.now(ZoneInfo("America/New_York")).date()
+            start_date = end_date - timedelta(days=30)  # safe lookback
+            aggs = self.client.get_aggs(
+                ticker=ticker,
+                multiplier=1,
+                timespan="day",
+                from_=start_date.strftime("%Y-%m-%d"),
+                to=end_date.strftime("%Y-%m-%d")
+            )
+            if aggs and len(aggs) >= 2:
+                return round(aggs[-2].close, 2)  # -2 is previous trading day
+            elif aggs and len(aggs) == 1:
+                return round(aggs[-1].close, 2)
+        except Exception as e:
+            st.warning(f"Previous close fetch failed: {e}")
         return None
 
     def fetch_data(self, ticker, timeframe="15min"):
@@ -62,7 +70,6 @@ class AITradeAgent:
                     to=to_str,
                     limit=5000
                 )
-
                 if not aggs or len(aggs) == 0:
                     return None
 
@@ -78,7 +85,6 @@ class AITradeAgent:
                 df["date"] = pd.to_datetime(df["timestamp"], unit="ms") \
                     .dt.tz_localize('UTC') \
                     .dt.tz_convert('America/New_York')
-
                 df = df.sort_values("date").reset_index(drop=True)
                 return df
 
@@ -88,26 +94,28 @@ class AITradeAgent:
                     st.warning(f"Rate limited. Retrying {timeframe} in {wait}s...")
                     time.sleep(wait)
                 else:
-                    st.error(f"Error fetching {timeframe}: {e}")
+                    st.error(f"Error fetching {timeframe} data: {e}")
                     return None
-
         return None
 
     def calculate_indicators(self, df):
         if len(df) < 30:
             return df
 
+        # RSI
         delta = df["close"].diff()
         gain = delta.where(delta > 0, 0).rolling(window=14).mean()
         loss = -delta.where(delta < 0, 0).rolling(window=14).mean()
         rs = gain / loss.replace(0, np.nan)
         df['rsi'] = 100 - (100 / (1 + rs))
 
+        # MACD
         df['ema12'] = df["close"].ewm(span=12, adjust=False).mean()
         df['ema26'] = df["close"].ewm(span=26, adjust=False).mean()
         df['macd'] = df['ema12'] - df['ema26']
         df['signal_line'] = df['macd'].ewm(span=9, adjust=False).mean()
 
+        # Relative Volume
         df['vol_avg'] = df['volume'].rolling(window=20).mean()
         df['rvol'] = df['volume'] / df['vol_avg'].replace(0, np.nan)
 
@@ -115,7 +123,7 @@ class AITradeAgent:
 
     def generate_signal(self, df, timeframe_name):
         if df is None or len(df) < 30:
-            return "NO DATA<br><small>Error or rate limited</small>", "#95a5a6"
+            return "NO DATA<br><small>Rate limited or error</small>", "#95a5a6"
 
         df = self.calculate_indicators(df)
         latest = df.iloc[-1]
@@ -133,8 +141,10 @@ class AITradeAgent:
                 signal, color = "BUY", "#2ecc71"
             else:
                 signal, color = "BULLISH", "#27ae60"
-        elif rsi_val > 75 or (not price_up and not macd_bullish):
-            signal, color = "SELL" if rsi_val > 75 else "BEARISH", "#e74c3c"
+        elif rsi_val > 75:
+            signal, color = "SELL", "#e74c3c"
+        elif not price_up and not macd_bullish:
+            signal, color = "BEARISH", "#c0392b"
         else:
             signal, color = "NEUTRAL", "#f1c40f"
 
@@ -160,10 +170,9 @@ class AITradeAgent:
         if df_15min is not None:
             df_15min = self.calculate_indicators(df_15min)
             latest_15 = df_15min.iloc[-1]
-            prev_15 = df_15min.iloc[-2]
             short_data = {
                 "bar_price": round(latest_15['close'], 2),
-                "rsi": round(latest_15['rsi'], 2) if not pd.isna(latest_15['rsi']) else "N/A",
+                "rsi": round(latest_15['rsi'], 1) if not pd.isna(latest_15['rsi']) else "N/A",
                 "rvol": round(latest_15['rvol'], 2) if not pd.isna(latest_15['rvol']) else "N/A",
                 "df": df_15min
             }
@@ -183,25 +192,26 @@ class AITradeAgent:
 st.set_page_config(page_title="AI Trade Agent Pro", layout="wide")
 
 now_et = datetime.now(ZoneInfo("America/New_York"))
-st.title("🚀 AI Trade Agent Pro - Multi-Timeframe + Live Price")
+st.title("🚀 AI Trade Agent Pro - Live Multi-Timeframe Analysis")
 st.markdown(f"**Market Time (ET):** {now_et.strftime('%A, %B %d, %Y | %I:%M:%S %p')}")
 
 api_key = os.getenv("POLYGON_API_KEY")
 if not api_key:
-    st.error("⚠️ Set POLYGON_API_KEY in Streamlit Secrets.")
+    st.error("⚠️ Please set POLYGON_API_KEY in Streamlit Secrets.")
     st.stop()
 
 agent = AITradeAgent(api_key)
 
-ticker = st.text_input("Enter Ticker Symbol", value="AMZN", help="e.g., TSLA, AAPL").upper().strip()
+ticker = st.text_input("Enter Ticker Symbol", value="SPY", help="e.g., TSLA, AAPL, NVDA").upper().strip()
 
 col1, col2 = st.columns([1, 4])
 with col1:
-    auto_refresh = st.checkbox("Auto Refresh (70s - Free Tier Safe)", value=True)
+    auto_refresh = st.checkbox("Auto Refresh Every 1 Minute", value=True)
 with col2:
     if st.button("🔄 Run Analysis Now"):
         st.session_state.force_run = True
 
+# Run analysis
 if auto_refresh or st.session_state.get("force_run", False):
     with st.spinner(f"Fetching live data for {ticker}..."):
         results = agent.get_multi_signals(ticker)
@@ -209,21 +219,21 @@ if auto_refresh or st.session_state.get("force_run", False):
     live_price = results["live_price"]
     prev_close = results["prev_close"]
     change = round(live_price - prev_close, 2) if live_price and prev_close else None
-    pct = round((change / prev_close) * 100, 2) if change and prev_close else None
+    pct = round((change / prev_close) * 100, 2) if change is not None and prev_close else None
 
-    # === Live Price & Metrics ===
+    # === Live Metrics ===
     c1, c2, c3, c4 = st.columns(4)
     if live_price:
-        c1.metric("**LIVE Current Price**", f"${live_price}",
-                  f"{change} ({pct}%)" if change is not None else "Real-time")
+        delta_str = f"{'' if change >= 0 else ''}{change:+.2f} ({pct:+.2f}%)" if change is not None else "Real-time"
+        c1.metric("**LIVE Price**", f"${live_price}", delta_str)
     else:
-        c1.metric("Current Price", "Unavailable")
+        c1.metric("LIVE Price", "Unavailable")
 
     if results["short_data"]:
         data = results["short_data"]
         c2.metric("RSI (14) - 15min", data['rsi'])
         c3.metric("Relative Volume - 15min", f"{data['rvol']}x")
-        c4.metric("Latest 15min Bar Close", f"${data['bar_price']}")
+        c4.metric("Latest 15min Close", f"${data['bar_price']}")
     else:
         c2.metric("RSI (14)", "N/A")
         c3.metric("Relative Volume", "N/A")
@@ -245,39 +255,50 @@ if auto_refresh or st.session_state.get("force_run", False):
     # === Chart ===
     if results["short_data"]:
         df = results["short_data"]["df"]
-        st.markdown("### 📈 Short-Term 15-Minute Chart")
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 9), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        st.markdown("### 📈 15-Minute Intraday Chart")
 
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        
         ax1.plot(df['date'], df['close'], color='#3498db', linewidth=2.5, label='Close Price')
         ax1.fill_between(df['date'], df['close'], alpha=0.1, color='#3498db')
-        ax1.set_title(f"{ticker} - 15-Minute Bars", fontsize=16)
+        ax1.set_title(f"{ticker} - 15-Minute Bars (Completed)", fontsize=16)
         ax1.set_ylabel("Price ($)")
         ax1.legend()
         ax1.grid(alpha=0.3)
 
+        # Volume bars colored by direction
         bar_colors = ['green' if c >= o else 'red' for c, o in zip(df['close'], df['open'])]
-        ax2.bar(df['date'], df['volume'], color=bar_colors, alpha=0.7)
+        ax2.bar(df['date'], df['volume'], color=bar_colors, alpha=0.7, width=0.006)
         ax2.plot(df['date'], df['vol_avg'], color='orange', linewidth=2, label='20-Period Avg Volume')
         ax2.set_ylabel("Volume")
         ax2.legend()
         ax2.grid(alpha=0.3)
 
+        fig.autofmt_xdate()
         st.pyplot(fig)
-        st.caption("📊 Chart uses completed 15min bars. LIVE price above includes extended hours & real-time trades.")
 
-        with st.expander("Recent 15min Data"):
-            display = df[['date', 'close', 'volume', 'rsi', 'rvol']].tail(15).copy()
+        st.caption("📊 Chart shows completed 15-minute bars. Live price above updates in real-time (incl. extended hours).")
+
+        with st.expander("Recent 15-Minute Data Table"):
+            display = df[['date', 'close', 'volume', 'rsi', 'rvol']].tail(20).copy()
             display['date'] = display['date'].dt.strftime('%m/%d %I:%M %p')
-            st.dataframe(display.round(2))
+            display = display.round({'close': 2, 'rsi': 1, 'rvol': 2})
+            st.dataframe(display, use_container_width=True)
 
-    # Auto-refresh (70s for free tier safety)
+    else:
+        st.info("No 15-minute data available yet. Try again in a moment or check ticker symbol.")
+
+    # === Auto Refresh Every 1 Minute ===
     if auto_refresh:
         placeholder = st.empty()
-        for i in range(70, 0, -1):
-            placeholder.info(f"🔄 Refreshing in {i}s... (Free tier safe)")
+        for i in range(60, 0, -1):
+            placeholder.info(f"🔄 Auto-refreshing in {i}s... (1-minute cycle)")
             time.sleep(1)
         placeholder.empty()
         st.rerun()
 
     if st.session_state.get("force_run"):
         del st.session_state.force_run
+
+else:
+    st.info("👈 Check 'Auto Refresh' or click 'Run Analysis Now' to begin.")
