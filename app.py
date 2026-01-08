@@ -9,36 +9,31 @@ import matplotlib.pyplot as plt
 import time
 
 # =========================
-# AI Trade Agent - Pro Version (1-Minute Refresh)
+# AI Trade Agent - Pro Version (Free Tier Optimized - No Real-Time Required)
 # =========================
 class AITradeAgent:
     def __init__(self, api_key):
         self.client = RESTClient(api_key)
 
-    def get_live_price(self, ticker):
-        """Fetch real-time current price (includes extended hours)"""
-        try:
-            trade = self.client.get_last_trade(ticker)
-            if trade and hasattr(trade, 'price'):
-                return round(trade.price, 2)
-        except Exception as e:
-            st.warning(f"Live price fetch failed: {e}")
-        return None
+    def get_current_price(self, short_data):
+        """Use latest 15min bar close as current price (free tier compatible)"""
+        if short_data and 'df' in short_data:
+            latest_close = short_data["bar_price"]
+            return latest_close, "Latest 15min Bar"
+        return None, "Unavailable"
 
     def get_prev_close(self, ticker):
-        """Get previous trading day's close reliably (handles weekends/holidays)"""
+        """Robust previous trading day close (handles weekends/holidays)"""
         try:
             end_date = datetime.now(ZoneInfo("America/New_York")).date()
-            start_date = end_date - timedelta(days=30)  # safe lookback
+            start_date = end_date - timedelta(days=30)
             aggs = self.client.get_aggs(
-                ticker=ticker,
-                multiplier=1,
-                timespan="day",
+                ticker=ticker, multiplier=1, timespan="day",
                 from_=start_date.strftime("%Y-%m-%d"),
                 to=end_date.strftime("%Y-%m-%d")
             )
             if aggs and len(aggs) >= 2:
-                return round(aggs[-2].close, 2)  # -2 is previous trading day
+                return round(aggs[-2].close, 2)  # Previous trading day
             elif aggs and len(aggs) == 1:
                 return round(aggs[-1].close, 2)
         except Exception as e:
@@ -102,20 +97,17 @@ class AITradeAgent:
         if len(df) < 30:
             return df
 
-        # RSI
         delta = df["close"].diff()
         gain = delta.where(delta > 0, 0).rolling(window=14).mean()
         loss = -delta.where(delta < 0, 0).rolling(window=14).mean()
         rs = gain / loss.replace(0, np.nan)
         df['rsi'] = 100 - (100 / (1 + rs))
 
-        # MACD
         df['ema12'] = df["close"].ewm(span=12, adjust=False).mean()
         df['ema26'] = df["close"].ewm(span=26, adjust=False).mean()
         df['macd'] = df['ema12'] - df['ema26']
         df['signal_line'] = df['macd'].ewm(span=9, adjust=False).mean()
 
-        # Relative Volume
         df['vol_avg'] = df['volume'].rolling(window=20).mean()
         df['rvol'] = df['volume'] / df['vol_avg'].replace(0, np.nan)
 
@@ -155,7 +147,6 @@ class AITradeAgent:
         return f"{signal}<br><small>{caption}</small>", color
 
     def get_multi_signals(self, ticker):
-        live_price = self.get_live_price(ticker)
         prev_close = self.get_prev_close(ticker)
 
         df_15min = self.fetch_data(ticker, "15min")
@@ -178,7 +169,6 @@ class AITradeAgent:
             }
 
         return {
-            "live_price": live_price,
             "prev_close": prev_close,
             "short": (short_signal, short_color),
             "medium": (med_signal, med_color),
@@ -192,7 +182,7 @@ class AITradeAgent:
 st.set_page_config(page_title="AI Trade Agent Pro", layout="wide")
 
 now_et = datetime.now(ZoneInfo("America/New_York"))
-st.title("🚀 AI Trade Agent Pro - Live Multi-Timeframe Analysis")
+st.title("🚀 AI Trade Agent Pro - Multi-Timeframe Analysis (Free Tier)")
 st.markdown(f"**Market Time (ET):** {now_et.strftime('%A, %B %d, %Y | %I:%M:%S %p')}")
 
 api_key = os.getenv("POLYGON_API_KEY")
@@ -211,23 +201,22 @@ with col2:
     if st.button("🔄 Run Analysis Now"):
         st.session_state.force_run = True
 
-# Run analysis
 if auto_refresh or st.session_state.get("force_run", False):
-    with st.spinner(f"Fetching live data for {ticker}..."):
+    with st.spinner(f"Fetching data for {ticker}..."):
         results = agent.get_multi_signals(ticker)
 
-    live_price = results["live_price"]
+    current_price, price_type = agent.get_current_price(results["short_data"])
     prev_close = results["prev_close"]
-    change = round(live_price - prev_close, 2) if live_price and prev_close else None
+    change = round(current_price - prev_close, 2) if current_price and prev_close else None
     pct = round((change / prev_close) * 100, 2) if change is not None and prev_close else None
 
-    # === Live Metrics ===
+    # === Metrics ===
     c1, c2, c3, c4 = st.columns(4)
-    if live_price:
-        delta_str = f"{'' if change >= 0 else ''}{change:+.2f} ({pct:+.2f}%)" if change is not None else "Real-time"
-        c1.metric("**LIVE Price**", f"${live_price}", delta_str)
+    if current_price:
+        delta_str = f"{'' if change >= 0 else ''}{change:+.2f} ({pct:+.2f}%)" if change is not None else ""
+        c1.metric(f"**Current Price** ({price_type})", f"${current_price}", delta_str)
     else:
-        c1.metric("LIVE Price", "Unavailable")
+        c1.metric("Current Price", "Unavailable")
 
     if results["short_data"]:
         data = results["short_data"]
@@ -239,7 +228,7 @@ if auto_refresh or st.session_state.get("force_run", False):
         c3.metric("Relative Volume", "N/A")
         c4.metric("Latest Bar", "N/A")
 
-    # === Multi-Timeframe Signals ===
+    # === Signals ===
     st.markdown("### 📊 Trend Signals Across Timeframes")
     s1, s2, s3 = st.columns(3)
     with s1:
@@ -266,7 +255,6 @@ if auto_refresh or st.session_state.get("force_run", False):
         ax1.legend()
         ax1.grid(alpha=0.3)
 
-        # Volume bars colored by direction
         bar_colors = ['green' if c >= o else 'red' for c, o in zip(df['close'], df['open'])]
         ax2.bar(df['date'], df['volume'], color=bar_colors, alpha=0.7, width=0.006)
         ax2.plot(df['date'], df['vol_avg'], color='orange', linewidth=2, label='20-Period Avg Volume')
@@ -277,18 +265,17 @@ if auto_refresh or st.session_state.get("force_run", False):
         fig.autofmt_xdate()
         st.pyplot(fig)
 
-        st.caption("📊 Chart shows completed 15-minute bars. Live price above updates in real-time (incl. extended hours).")
+        st.caption("📊 Chart shows completed 15-minute bars. Price updates as new bars close (free tier).")
 
         with st.expander("Recent 15-Minute Data Table"):
             display = df[['date', 'close', 'volume', 'rsi', 'rvol']].tail(20).copy()
             display['date'] = display['date'].dt.strftime('%m/%d %I:%M %p')
             display = display.round({'close': 2, 'rsi': 1, 'rvol': 2})
             st.dataframe(display, use_container_width=True)
-
     else:
-        st.info("No 15-minute data available yet. Try again in a moment or check ticker symbol.")
+        st.info("No 15-minute data available yet. Market may be closed or try again shortly.")
 
-    # === Auto Refresh Every 1 Minute ===
+    # === Auto Refresh ===
     if auto_refresh:
         placeholder = st.empty()
         for i in range(60, 0, -1):
@@ -301,4 +288,4 @@ if auto_refresh or st.session_state.get("force_run", False):
         del st.session_state.force_run
 
 else:
-    st.info("👈 Check 'Auto Refresh' or click 'Run Analysis Now' to begin.")
+    st.info("👈 Check 'Auto Refresh' or click 'Run Analysis Now' to start.")
